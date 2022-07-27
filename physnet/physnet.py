@@ -114,6 +114,8 @@ class PhysNet():
         Parameters:
             theta_eps (float) - difference tolerance for angles
             r_eps (float) - difference tolerance for radius
+            degrees (bool) - compare angles by degree
+            dual (bool) - only change segment if both angle and radial condition are met
         """
         # Intialize contracted network
         self.contracted_g = copy.deepcopy(self.g)
