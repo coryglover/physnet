@@ -4,6 +4,8 @@ import copy
 import numpy as np
 from itertools import combinations
 import math
+import matplotlib.cm as cm
+import matplotlib as matplotlib
 
 class PhysNet():
     """
@@ -33,13 +35,39 @@ class PhysNet():
         self.df = pd.read_csv(file,delimiter=' ',names=['node_id','type','x','y','z','radius','parents'])
         pass
 
+    def to_swc(self,file):
+        """
+        Converts dataframe to SWC
+        """
+        self.df.to_csv(file,sep=' ',header=False,index=False)
+        pass
+
+    def draw_networkx(self,cmap_name='Wistia',file=None):
+        """
+        Draw networkx object with edges colored by segments
+        """
+        # Get color values
+        norm = matplotlib.colors.Normalize(vmin=np.min(self.df['type']),vmax=np.max(self.df['type']))
+        cmap = cm.get_cmap(cmap_name)
+        colors = norm(ex1.df['type'])
+
+        # Get node positions
+        pos = {self.df.iloc[i,0]: self.df.iloc[i,[2:5]]}
+
+        # Make plot
+        nx.draw(self.g,pos=pos,edge_color=colors)
+        if file:
+            plt.savefig(file)
+
+        pass
+
     def create_g(self):
         """
         Generates graphs from SWC file.
         """
         self.g = nx.Graph()
         for i in range(len(self.df)):
-            self.g.add_edge(self.df.loc[i,'node_id'],self.df.loc[i,'parents'])
+            self.g.add_edge(self.df.loc[i,'node_id'],self.df.loc[i,'parents'],type=self.df.loc[i,'type'])
         self.g.remove_node(-1)
         pass
 
