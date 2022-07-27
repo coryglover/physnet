@@ -106,10 +106,10 @@ class PhysNet():
             return math.degrees(theta)
         return theta
 
-    def physicality_segment(self,theta_eps,r_eps,degrees=False):
+    def physicality_segment(self,theta_eps=1.5,r_eps=1,degrees=False,dual=False):
         """
         Segements a skeletonization based on absolute difference of angle or absolute difference
-        in radius width between adjacent skeleton links.
+        in radius width between adjacent skeleton links as well as degree two nodes.
 
         Parameters:
             theta_eps (float) - difference tolerance for angles
@@ -118,42 +118,110 @@ class PhysNet():
         # Intialize contracted network
         self.contracted_g = copy.deepcopy(self.g)
 
-        # Loop through nodes
-        for u in self.g.nodes():
-            # Get edges associated with each node
-            edges = self.contracted_g.edges(u)
-            # Compare each pair of edges
-            edge_pairs = list(combinations(edges,2))
-            for e, f in edge_pairs:
-                print(e,f)
-                # Get angles
-                e_theta = self.find_angle(e,degrees)
-                f_theta = self.find_angle(f,degrees)
+        # Perform dfs
+        dfs_edges = list(nx.dfs_edges(self.g))
 
-                # Get absolute difference between angles
-                if np.abs(e_theta - f_theta) < theta_eps:
-                    # Check radius width
-                    df_idx = np.array(self.df[['node_id','parents']])
-                    try:
-                        eidx = np.where(np.all(e==df_idx,axis=1))[0][0]
-                    except:
-                        eidx = np.where(np.all(e[::-1]==df_idx,axis=1))[0][0]
-                    try:
-                        fidx = np.where(np.all(f==df_idx,axis=1))[0][0]
-                    except:
-                        fidx = np.where(np.all(f[::-1]==df_idx,axis=1))[0][0]
-                    # Check radius
-                    e_r = self.df.iloc[eidx,5]
-                    f_r = self.df.iloc[fidx,5]
-                    if np.abs(e_r-f_r) < r_eps:
-                        # Contract edge
-                        self.contracted_g.add_edge(e[1],f[1])
-                        print(f"new_edge {(e[1],f[1])}")
-                        self.contracted_g.remove_edge(e[0],e[1])
-                        self.contracted_g.remove_edge(f[0],f[1])
+        # Initialize variables
+        segment = 0
+        last_segment = 0
+        visited_nodes = []
+        visited_edges = {u: [] for u in self.g.nodes}
+        df_idx = np.array(self.df[['node_id','parents']])
 
-            # Remove node if no longer connected
-            if self.contracted_g.degree(u) == 0:
-                self.contracted_g.remove_node(u)
+        # Traverse edges
+        for i, e in enumerate(dfs_edges):
+            # Find edge index
+            try:
+                eidx = np.where(np.all(e==df_idx,axis=1))[0][0]
+            except:
+                eidx = np.where(np.all(e[::-1]==df_idx,axis=1))[0][0]
+
+            # Check that we are at a new node
+            if e[0] in visited_nodes:
+                # Get edges already visited
+                edges = list(set(visited_edges[e[0]] + visited_edges[e[1]]))
+                # Compare with each edge
+                for k in range(len(edges)):
+                    prev_eidx = edges[k][1]
+                    # Get raidus of both edges
+                    if np.abs(self.df.iloc[eidx,5] - self.df.iloc[prev_eidx,5]) > r_eps:
+                        # Check if we need both conditions
+                        if dual:
+                            e_angle = self.find_angle(e,degrees)
+                            f_angle = self.find_angle(dfs_edges[i-1],degrees)
+
+                            # Compare angles
+                            if degrees:
+                                max_angle = 360
+                            else:
+                                max_angle = 2*np.pi
+
+                            diff_angle = min(abs(e_angle-f_angle),max_angle-abs(e_angle-f_angle))
+                            # Update segment
+                            if diff_angle > theta_eps:
+                                segment = self.df.iloc[prev_eidx,1]
+                        else:
+                            # Update segment
+                            segment = self.df.iloc[prev_eidx,1]
+
+                self.df.iloc[eidx,1] = segment
+                prev_eidx = eidx
+                continue
+
+            # Update visited nodes
+            visited_nodes.append(e[0])
+            visited_edges[e[0]] += [(e,eidx)]
+            visited_edges[e[1]] += [(e,eidx)]
+
+            # Initialize first segment
+            if i == 0:
+                self.df.iloc[eidx,1] = segment
+                prev_eidx = eidx
+
+            # Update other edges
+            else:
+                # Get raidus of both edges
+                if np.abs(self.df.iloc[eidx,5] - self.df.iloc[prev_eidx,5]) > r_eps:
+                    # Check if we need both conditions
+                    if dual:
+                        e_angle = self.find_angle(e,degrees)
+                        f_angle = self.find_angle(dfs_edges[i-1],degrees)
+
+                        # Compare angles
+                        if degrees:
+                            max_angle = 360
+                        else:
+                            max_angle = 2*np.pi
+
+                        diff_angle = min(abs(e_angle-f_angle),max_angle-abs(e_angle-f_angle))
+                        # Update segment
+                        if diff_angle > theta_eps:
+                            last_segment += 1
+                            segment = last_segment
+
+                    else:
+                        # Update segment
+                        last_segment += 1
+                        segment = last_segment
+                # Check angle
+                else:
+                    e_angle = self.find_angle(e,degrees)
+                    f_angle = self.find_angle(dfs_edges[i-1],degrees)
+
+                    # Compare angles
+                    if degrees:
+                        max_angle = 360
+                    else:
+                        max_angle = np.pi
+
+                    diff_angle = min(abs(e_angle-f_angle),max_angle-abs(e_angle-f_angle))
+                    # Update segment
+                    if diff_angle > theta_eps:
+                        last_segment += 1
+                        segment = last_segment
+
+                # Update DataFrame
+                self.df.iloc[eidx,1] = segment
+                prev_eidx = eidx
 
         pass
