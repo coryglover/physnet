@@ -6,6 +6,7 @@ from itertools import combinations
 import math
 import matplotlib.cm as cm
 import matplotlib as matplotlib
+from sympy import *
 
 class PhysNet():
     """
@@ -52,7 +53,7 @@ class PhysNet():
         colors = norm(ex1.df['type'])
 
         # Get node positions
-        pos = {self.df.iloc[i,0]: self.df.iloc[i,[2:5]]}
+        pos = {self.df.iloc[i,0]: self.df.iloc[i,[2,3,4]]}
 
         # Make plot
         nx.draw(self.g,pos=pos,edge_color=colors)
@@ -67,8 +68,10 @@ class PhysNet():
         """
         self.g = nx.Graph()
         for i in range(len(self.df)):
-            self.g.add_edge(self.df.loc[i,'node_id'],self.df.loc[i,'parents'],type=self.df.loc[i,'type'])
+            self.g.add_edge(self.df.loc[i,'node_id'],self.df.loc[i,'parents'],type=self.df.loc[i,'type'],weight=self.df.loc[i,'radius'])
         self.g.remove_node(-1)
+        node_pos = {self.df.loc[i,'node_id']: [self.df.loc[i,'x'],self.df.loc[i,'y'],self.df.loc[i,'z']]}
+        nx.set_node_attributes(self.g, node_pos, "pos")
         pass
 
     def degree_segment(self,d=2):
@@ -255,3 +258,246 @@ class PhysNet():
                 prev_eidx = eidx
 
         pass
+
+    def find_connected_edges(self,d=3):
+        """
+        Returns connected edges at nodes of degree d.
+
+        Parameters:
+            d (int) - degree
+
+        Returns:
+            connected_edges (list) - connected edges at nodes of degree d
+        """
+
+        degree_list = list([(node, val) for (node, val) in self.g.degree()])
+        d_nodes = [degree_pair[0] for degree_pair in degree_list if degree_pair[1] == d]
+        connected_edges = [list(self.g.edges(element)) for element in d_nodes]
+
+        return connected_edges
+
+    def connected_edges_to_angles(self,connected_edges,radius=1):
+        """
+        Returns edge angles for all edge pairs in connected edges array.
+
+        Parameters:
+            connected_edges (list) - list of connected edges
+            radius (int)
+
+        Return:
+            angle_list (list) - edge angles between pairs of edges in connected_edges
+        """
+
+        def asSpherical(xyz):
+            x       = xyz[0]
+            y       = xyz[1]
+            z       = xyz[2]
+            XsqPlusYsq = x**2 + y**2
+            r = sqrt(XsqPlusYsq + z**2)
+            theta = atan2(z,sqrt(XsqPlusYsq))
+            phi = atan2(y,x)
+            return [r,theta,phi]
+
+        angle_list = []
+        for i in range(len(connected_edges)):
+            edge_l = connected_edges[i]
+            sub_angles = []
+            base_pos = self.g.nodes[edge_l[0][0]]['pos']
+            paths = nx.single_source_shortest_path_length(self.g, edge_l[0][0], cutoff=radius)
+            far_nodes = []
+            a = list(paths.values())
+            b = list(paths.keys())
+            paths = [(b[i],a[i]) for i in range(len(a))]
+            for sub_path in paths:
+                if sub_path[1] == radius:
+                    far_nodes.append(sub_path[0])
+            for j in range(len(edge_l)):
+                if len(edge_l) == len(far_nodes) and radius > 1:
+                    for k in range(len(far_nodes)):
+                        if nx.shortest_path_length(self.g, source=int(edge_l[j][1]), target=int(far_nodes[k])) == radius-1:
+                            pos2 = self.g.nodes[far_nodes[k]]['pos']
+                else:
+                    pos2 = self.g.nodes[edge_l[j][1]]['pos']
+                xyz = [a_i - b_i for a_i, b_i in zip(pos2, base_pos)]
+                spherical = asSpherical(xyz)
+                sub_angles.append(list([spherical[1],spherical[2]]))
+            angle_list.append(sub_angles)
+
+        return angle_list
+
+    def connected_edges_to_widths(self,connected_edges,radius=1):
+        """
+        Returns edge widths for all edge pairs in connected edges array.
+
+        Parameters:
+            connected_edges (list)
+            radius (int)
+
+        Returns:
+            width_list (list) - list of edge width for pairs of connected edges
+        """
+
+        width_list = []
+        for i in range(len(connected_edges)):
+            edge_l = connected_edges[i]
+            sub_widths = []
+            base_pos = self.g.nodes[edge_l[0][0]]['pos']
+            paths = nx.single_source_shortest_path_length(self.g, edge_l[0][0], cutoff=radius)
+            far_nodes = []
+            a = list(paths.values())
+            b = list(paths.keys())
+            paths = [(b[i],a[i]) for i in range(len(a))]
+            for sub_path in paths:
+                if sub_path[1] == radius:
+                    far_nodes.append(sub_path[0])
+            for j in range(len(edge_l)):
+                if len(edge_l) == len(far_nodes) and radius > 1:
+                    for k in range(len(far_nodes)):
+                        if nx.shortest_path_length(self.g, source=int(edge_l[j][1]), target=int(far_nodes[k])) == radius-1:
+                            shortest_path = nx.shortest_path(self.g, source=int(edge_l[j][1]), target=int(far_nodes[k]))
+                            weight = self.g[shortest_path[-1]][shortest_path[-2]]['weight']
+                            sub_widths.append(float(weight))
+                else:
+                    weight = self.g[edge_l[j][0]][edge_l[j][1]]['weight']
+                    sub_widths.append(float(weight))
+            width_list.append(sub_widths)
+
+        return width_list
+
+    def reject_outliers(self, data, m=1):
+        """
+        Filters out the outliers in a set of data based on the mean and the standard
+        deviation.
+
+        Parameters:
+            data (ndarray)
+            m (float) - multiple of standard deviations
+
+        Return:
+            filtered_data (ndarray) - data without outliers
+        """
+        return data[abs(data - np.mean(data)) < m * np.std(data)]
+
+    def tangent(self,v1, v2):
+        """
+        Calculates the tangent vector as the unit vector pointing from
+        vector v1 to vector v2.
+
+        Parameters:
+            v1 (ndarray)
+            v2 (ndarray)
+
+        Returns:
+            t (ndarray) - tangent vector
+        """
+        if np.allclose(v2,v1):
+            return 0
+        return (v2 - v1) / np.sqrt(np.sum((v2-v1)**2))
+
+
+    #calculate the curvature in edge center v2
+    def curvature(self,e,prev=None,next=None):
+        """
+        Calculate curvature of a segment.
+
+        Parameters:
+            e (ndarray) - segment
+            prev (ndarray) - previous segment
+            next (ndarray) - next segment
+
+        Returns:
+            curvature (float)
+        """
+        df_idx = np.array(self.df[['node_id','parents']])
+
+        # Get vectors
+        e0_coord = np.array(self.df[self.df['node_id']==e[0]][['x','y','z']])
+        e1_coord = np.array(self.df[self.df['node_id']==e[1]][['x','y','z']])
+        e_vec = e1_coord - e0_coord
+
+        if prev is None:
+            # Find prev edges
+            edge1 = np.where(df_idx[:,0]==e[0])[0][0]
+            edge2 = np.where(df_idx[:,1]==e[0])[0][0]
+            if np.allclose(df_idx[edge1],e):
+                prev = df_idx[edge2][0]
+            else:
+                prev = df_idx[edge1][1]
+
+            # Get coordinates
+            prev_coord0 = np.array(self.df[self.df['node_id']==prev][['x','y','z']])
+            prev_coord1 = np.array(self.df[self.df['node_id']==e[0]][['x','y','z']])
+            prev_vec = prev_coord1 - prev_coord0
+
+        else:
+            prev_coord0 = np.array(self.df[self.df['node_id']==prev[0]][['x','y','z']])
+            prev_coord1 = np.array(self.df[self.df['node_id']==prev[1]][['x','y','z']])
+            prev_vec = prev_coord0 - prev_coord1
+
+        if next is None:
+            # Find next edge
+            edge1 = np.where(df_idx[:,0]==e[1])[0][0]
+            edge2 = np.where(df_idx[:,1]==e[1])[0][0]
+
+            if np.allclose(df_idx[edge1],e):
+                next = df_idx[edge2][0]
+            else:
+                next = df_idx[edge1][1]
+
+            # Get coordinates
+            next_coord0 = np.array(self.df[self.df['node_id']==next][['x','y','z']])
+            next_coord1 = np.array(self.df[self.df['node_id']==e[1]][['x','y','z']])
+            next_vec = next_coord1 - next_coord0
+
+        else:
+            next_coord0 = np.array(self.df[self.df['node_id']==next[0]][['x','y','z']])
+            next_coord1 = np.array(self.df[self.df['node_id']==next[1]][['x','y','z']])
+            next_vec = next_coord0 - next_coord1
+
+        e_vec = e_vec[0]
+        prev_vec = prev_vec[0]
+        next_vec = next_vec[0]
+
+        n = sqrt(sum((self.tangent(e_vec,next_vec)- self.tangent(e_vec,prev_vec))**2))
+
+        d = sqrt(sum(((e_vec+next_vec)/2 - (prev_vec+e_vec)/2)**2))
+
+        return n/d
+
+
+    #the avarage curvature of a link
+    def curvature_link(self,type):
+        """
+        Calculate the curvature of a segmented link.
+
+        Parameters:
+            type (int)
+
+        Returns:
+            total_cur (float)
+        """
+        # Get link
+        type_edges = self.df[self.df['type']==type][['node_id','parents']]
+
+        # Get ends of link
+        end1 = list(set(type_edges['node_id']).difference(set(type_edges['parents'])))[0]
+        end2 = list(set(type_edges['parents']).difference(set(type_edges['node_id'])))[0]
+        type_edges = np.array(type_edges)
+        end1_idx = np.where(type_edges[:,0]==end1)[0][0]
+        end2_idx = np.where(type_edges[:,1]==end2)[0][0]
+
+        # Remove ends of link
+        l = np.array(type_edges)
+        l = np.delete(l,end1_idx,0)
+        l = np.delete(l,end2_idx,0)
+
+        # Check that link is long enough
+        if len(l) < 3:
+            return -1
+
+        # Get curvature of every segment
+        s = np.zeros(len(l))
+        for i in range(len(s)):
+            s[i] = self.curvature(l[i])
+
+        return np.sum(self.reject_outliers(s))
