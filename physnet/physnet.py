@@ -26,14 +26,15 @@ class PhysNet():
         self.g = None
         self.contracted_g = None
 
-    def read_swc(self,file):
+    def read_swc(self,file,usecols=None):
         """
         Reads SWC and converts into a pandas DataFrame.
 
         Parameters:
             file (str) - swc file path
+            usecols (list) - list of column names in swc file
         """
-        self.df = pd.read_csv(file,delimiter=' ',names=['node_id','type','x','y','z','radius','parents'])
+        self.df = pd.read_csv(file,delimiter=' ',names=['node_id','type','x','y','z','radius','parents'],usecols=usecols)
         pass
 
     def to_swc(self,file):
