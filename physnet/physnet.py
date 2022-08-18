@@ -1,3 +1,9 @@
+### Physical Network Analysis Package
+### Center for Complex Networks, Network Science Institute, Northeastern University
+
+### Authors: Cory Glover, Benjamin Piazza, Csaba Both
+### Contact: Cory Glover, glover.co@northeastern.edu
+
 import pandas as pd
 import networkx as nx
 import copy
