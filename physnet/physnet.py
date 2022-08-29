@@ -13,6 +13,7 @@ import math
 import matplotlib.cm as cm
 import matplotlib as matplotlib
 from sympy import *
+import os
 
 class PhysNet():
     """
@@ -50,6 +51,28 @@ class PhysNet():
         self.df.to_csv(file,sep=' ',header=False,index=False)
         pass
 
+    def read_swc_bulk(self,foldername):
+        """
+        Reads all SWC in a folder and aggregates their data into one pandas DataFrame.
+
+        Parameters:
+            folder (str) - swc folder directory
+        """
+        base_directory = os.getcwd()
+        os.chdir(base_directory + "\\" + foldername)
+        files = listdir()
+        filenames = []
+        for i in range(len(files)):
+            if len(files[i]) > 4:
+                if files[i][-4:-1] == '.sw':
+                    filenames.append(files[i][:-4])
+
+        self.df = pd.read_csv(filenames[0]+".swc",delimiter=' ',names=['node_id','type','x','y','z','radius','parents'])
+        for i in range(1,len(filenames)):
+            df2 = pd.read_csv(filenames[i]+".swc",delimiter=' ',names=['node_id','type','x','y','z','radius','parents'])
+            self.df = pd.concat([self.df,df2])
+        pass
+
     def draw_networkx(self,cmap_name='Wistia',file=None):
         """
         Draw networkx object with edges colored by segments
@@ -57,13 +80,13 @@ class PhysNet():
         # Get color values
         norm = matplotlib.colors.Normalize(vmin=np.min(self.df['type']),vmax=np.max(self.df['type']))
         cmap = cm.get_cmap(cmap_name)
-        colors = norm(ex1.df['type'])
+        colors = norm(self.df['type'])
 
         # Get node positions
-        pos = {self.df.iloc[i,0]: self.df.iloc[i,[2,3,4]]}
+        pos = {self.df.iloc[i,0]: self.df.iloc[i,[2,3,4]] for i in range(len(self.df))}
 
         # Make plot
-        nx.draw(self.g,pos=pos,edge_color=colors)
+        nx.draw(self.g,pos=pos,edge_color=colors,node_size=.1)
         if file:
             plt.savefig(file)
 
@@ -265,23 +288,6 @@ class PhysNet():
                 prev_eidx = eidx
 
         pass
-
-    def find_connected_edges(self,d=3):
-        """
-        Returns connected edges at nodes of degree d.
-
-        Parameters:
-            d (int) - degree
-
-        Returns:
-            connected_edges (list) - connected edges at nodes of degree d
-        """
-
-        degree_list = list([(node, val) for (node, val) in self.g.degree()])
-        d_nodes = [degree_pair[0] for degree_pair in degree_list if degree_pair[1] == d]
-        connected_edges = [list(self.g.edges(element)) for element in d_nodes]
-
-        return connected_edges
 
     def connected_edges_to_angles(self,connected_edges,radius=1):
         """
@@ -508,3 +514,162 @@ class PhysNet():
             s[i] = self.curvature(l[i])
 
         return np.sum(self.reject_outliers(s))
+
+    def find_connected_edges(self,d=3):
+        """
+        Returns connected edges at nodes of degree d.
+
+        Parameters:
+            d (int) - degree
+
+        Returns:
+            connected_edges (list) - connected edges at nodes of degree d
+        """
+
+        degree_list = list([(node, val) for (node, val) in self.g.degree()])
+        d_nodes = [degree_pair[0] for degree_pair in degree_list if degree_pair[1] == d]
+        connected_edges = [list(self.g.edges(element)) for element in d_nodes]
+
+        return connected_edges
+
+    def connected_edges_to_angles(self,connected_edges,radius=1):
+        """
+        Returns edge angles for all edge pairs in connected edges array.
+
+        Parameters:
+            connected_edges (list) - list of connected edges
+            radius (int)
+
+        Return:
+            angle_list (list) - edge angles between pairs of edges in connected_edges
+        """
+
+        def asSpherical(xyz):
+            x       = xyz[0]
+            y       = xyz[1]
+            z       = xyz[2]
+            XsqPlusYsq = x**2 + y**2
+            r = sqrt(XsqPlusYsq + z**2)
+            theta = math.atan2(z,sqrt(XsqPlusYsq))
+            phi = math.atan2(y,x)
+            return [r,theta,phi]
+
+        angle_list = []
+        for i in range(len(connected_edges)):
+            edge_l = connected_edges[i]
+            sub_angles = []
+            base_pos = self.g.nodes[edge_l[0][0]]['pos']
+            paths = nx.single_source_shortest_path_length(self.g, edge_l[0][0], cutoff=radius)
+            far_nodes = []
+            a = list(paths.values())
+            b = list(paths.keys())
+            paths = [(b[i],a[i]) for i in range(len(a))]
+            for sub_path in paths:
+                if sub_path[1] == radius:
+                    far_nodes.append(sub_path[0])
+            counter = 0
+            for j in range(len(edge_l)):
+                if len(edge_l) == len(far_nodes) and radius > 1:
+                    for k in range(len(far_nodes)):
+                        if nx.shortest_path_length(self.g, source=int(edge_l[j][1]), target=int(far_nodes[k])) == radius-1:
+                            pos2 = self.g.nodes[far_nodes[k]]['pos']
+                elif edge_l[j][1] != -1:
+                    pos2 = self.g.nodes[edge_l[j][1]]['pos']
+                else:
+                    counter = 1
+                    break
+                xyz = [a_i - b_i for a_i, b_i in zip(pos2, base_pos)]
+                spherical = asSpherical(xyz)
+                sub_angles.append(list([spherical[1],spherical[2]]))
+            if counter == 0:
+                angle_list.append(sub_angles)
+            else:
+                angle_list.append([])
+
+        return angle_list
+
+    def connected_edges_to_widths(self,connected_edges,radius=1):
+        """
+        Returns edge widths for all edge pairs in connected edges array.
+
+        Parameters:
+            connected_edges (list)
+            radius (int)
+
+        Returns:
+            width_list (list) - list of edge width for pairs of connected edges
+        """
+
+        width_list = []
+        for i in range(len(connected_edges)):
+            edge_l = connected_edges[i]
+            sub_widths = []
+            base_pos = self.g.nodes[edge_l[0][0]]['pos']
+            paths = nx.single_source_shortest_path_length(self.g, edge_l[0][0], cutoff=radius)
+            far_nodes = []
+            a = list(paths.values())
+            b = list(paths.keys())
+            paths = [(b[i],a[i]) for i in range(len(a))]
+            for sub_path in paths:
+                if sub_path[1] == radius:
+                    far_nodes.append(sub_path[0])
+            for j in range(len(edge_l)):
+                if len(edge_l) == len(far_nodes) and radius > 1:
+                    for k in range(len(far_nodes)):
+                        if nx.shortest_path_length(self.g, source=int(edge_l[j][1]), target=int(far_nodes[k])) == radius-1:
+                            shortest_path = nx.shortest_path(self.g, source=int(edge_l[j][1]), target=int(far_nodes[k]))
+                            weight = self.g[shortest_path[-1]][shortest_path[-2]]['weight']
+                            sub_widths.append(float(weight))
+                else:
+                    weight = self.g[edge_l[j][0]][edge_l[j][1]]['weight']
+                    sub_widths.append(float(weight))
+            width_list.append(sub_widths)
+
+        return width_list
+
+    def connected_edges_to_widths_average(self,connected_edges,radius=5):
+        """
+        Returns average edge widths for all edge pairs in connected edges array up to radius.
+
+        Parameters:
+            connected_edges (list)
+            radius (int)
+
+        Returns:
+            width_list (list) - list of average edge width for pairs of connected edges
+        """
+
+        width_list = []
+        for i in range(len(connected_edges)):
+            edge_l = connected_edges[i]
+            sub_widths = []
+            base_pos = self.g.nodes[edge_l[0][0]]['pos']
+            paths = nx.single_source_shortest_path_length(self.g, edge_l[0][0], cutoff=radius)
+            far_nodes = []
+            a = list(paths.values())
+            b = list(paths.keys())
+            paths = [(b[i],a[i]) for i in range(len(a))]
+            for sub_path in paths:
+                if sub_path[1] == radius:
+                    far_nodes.append(sub_path[0])
+            counter = 0
+            for j in range(len(edge_l)):
+                if len(edge_l) == len(far_nodes) and radius > 1:
+                    for k in range(len(far_nodes)):
+                        if nx.shortest_path_length(self.g, source=int(edge_l[j][1]), target=int(far_nodes[k])) == radius-1:
+                            shortest_path = nx.shortest_path(self.g, source=int(edge_l[j][1]), target=int(far_nodes[k]))
+                            weight_array = []
+                            for i in range(len(shortest_path)-1):
+                                weight_array.append(float(self.g[shortest_path[i]][shortest_path[i+1]]['weight']))
+                            weight = np.mean(weight_array)
+                            sub_widths.append(float(weight))
+                            counter += 1
+                else:
+                    weight = self.g[edge_l[j][0]][edge_l[j][1]]['weight']
+                    sub_widths.append(float(weight))
+            if counter == 3:
+                width_list.append(sub_widths)
+            else:
+                width_list.append([])
+
+        return width_list
